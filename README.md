@@ -104,8 +104,19 @@ Run `npm run setup:downloader` once to install the official yt-dlp release in `t
 to your own yt-dlp executable. Source: https://github.com/yt-dlp/yt-dlp#installation
 
 Restart `npm run dev` after this update. The local URL import endpoint is also available
-with `npm run preview` after building. A static-only deployment cannot resolve TikTok links;
-this feature currently requires the local Vite server and only accepts loopback connections.
+with `npm run preview` after building and only accepts loopback connections.
+
+### Deploy on Vercel
+
+Set the Vercel project Root Directory to this folder (containing `package.json`, `api/`
+and `vercel.json`), then redeploy. `/api/media/import` is a Node.js Function;
+uploading only `dist/` to a static host does not provide this endpoint.
+The build command in `vercel.json` installs the verified Linux yt-dlp binary and builds
+the frontend. The binary is included in the function bundle, with a 180-second timeout.
+Remove any dashboard Build Command override so this command runs. The build requires
+access to GitHub releases. Downloads use temporary storage and stream to the browser.
+TikTok may still reject requests from hosting-provider IP addresses; this is separate
+from a missing API route. Concurrency is limited per function instance, not globally.
 
 Only individual public TikTok videos and direct video files are supported. Private, login-required,
 region-restricted or unavailable videos may fail. The importer does not request account cookies.

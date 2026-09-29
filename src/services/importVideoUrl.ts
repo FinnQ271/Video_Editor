@@ -10,10 +10,12 @@ export async function downloadVideoUrl(text: string, signal: AbortSignal, onProg
   })
   if (!response.ok) {
     const message = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(message?.error ?? 'Không tải được video. Hãy khởi động lại npm run dev rồi thử lại.')
+    throw new Error(message?.error ?? (response.status === 404
+      ? 'API nhập video chưa được triển khai. Hãy deploy lại ứng dụng kèm thư mục api và cấu hình vercel.json.'
+      : 'Không tải được video. Vui lòng thử lại sau.'))
   }
   const type = response.headers.get('content-type')?.split(';')[0] ?? ''
-  if (!type.startsWith('video/')) throw new Error('Dịch vụ nhập URL chưa sẵn sàng. Hãy khởi động lại npm run dev.')
+  if (!type.startsWith('video/')) throw new Error('Dịch vụ nhập URL trả về dữ liệu không hợp lệ. Hãy kiểm tra cấu hình API trên máy chủ.')
   const total = Number(response.headers.get('content-length')) || undefined
   if (total && total > MAX_URL_VIDEO_BYTES) throw new Error('Video vượt giới hạn 256 MB.')
   const reader = response.body?.getReader()

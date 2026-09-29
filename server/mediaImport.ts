@@ -130,10 +130,10 @@ async function downloadTikTok(url: URL, res: ServerResponse, signal: AbortSignal
 }
 
 let activeImports = 0
-export async function mediaImportHandler(req: IncomingMessage, res: ServerResponse) {
-  // This downloader is for the local editing app, not a public forwarding endpoint.
+export async function mediaImportHandler(req: IncomingMessage, res: ServerResponse, options: { localOnly?: boolean; body?: unknown } = {}) {
+  // Vite stays loopback-only; the deployed API explicitly enables remote clients.
   const peer = req.socket.remoteAddress
-  if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(peer ?? '')) { res.writeHead(403).end(); return }
+  if (options.localOnly !== false && !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(peer ?? '')) { res.writeHead(403).end(); return }
   if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host && req.headers.origin !== 'https://' + req.headers.host) { res.writeHead(403).end(); return }
   const fail = (status: number, error: string) => {
     if (!res.headersSent) res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }).end(JSON.stringify({error}))
@@ -150,10 +150,16 @@ export async function mediaImportHandler(req: IncomingMessage, res: ServerRespon
   req.on('aborted', disconnected)
   try {
     let body = ''
-    for await (const chunk of req) {
-      body += chunk.toString()
-      if (body.length > 8192) throw new Error('Liên kết quá dài.')
+    if (options.body !== undefined) {
+      // Vercel may parse JSON before invoking the function.
+      body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body)
+    } else {
+      for await (const chunk of req) {
+        body += chunk.toString()
+        if (body.length > 8192) throw new Error('Liên kết quá dài.')
+      }
     }
+    if (body.length > 8192) throw new Error('Liên kết quá dài.')
     const data = JSON.parse(body) as { url?: unknown }
     if (typeof data.url !== 'string') throw new Error('Thiếu liên kết video.')
     const source = parseVideoUrl(data.url)

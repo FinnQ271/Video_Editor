@@ -5,6 +5,33 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { parseVideoUrl, isTikTokUrl } from '../src/utils/videoUrl.ts'
 import { isPublicAddress, validateRemoteUrl, mediaImportHandler, tikTokDownloadArgs, tikTokDownloadError, MAX_BYTES } from './mediaImport.ts'
+import vercelHandler from '../api/media/import.ts'
+
+test('deployed route accepts remote clients and Vercel parsed bodies while retaining validation', async () => {
+  const server = createServer((req, res) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: '203.0.113.1' })
+    if (req.url === '/local') { void mediaImportHandler(req, res); return }
+    const body = req.url === '/large' ? { url: 'x'.repeat(8193) } : { url: 'http://127.0.0.1/video.mp4' }
+    void vercelHandler(Object.assign(req, { body }), res)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const url = 'http://127.0.0.1:' + (server.address() as AddressInfo).port
+    assert.equal((await fetch(url)).status, 405)
+    assert.equal((await fetch(url + '/local')).status, 403)
+    assert.equal((await fetch(url, { method: 'POST' })).status, 415)
+    const headers = { 'Content-Type': 'application/json' }
+    assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' } })).status, 403)
+    const response = await fetch(url, { method: 'POST', headers })
+    assert.equal(response.status, 400)
+    assert.match((await response.json()).error, /địa chỉ nội bộ/)
+    const oversized = await fetch(url + '/large', { method: 'POST', headers })
+    assert.equal(oversized.status, 400)
+    assert.match((await oversized.json()).error, /quá dài/)
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
 
 test('TikTok copied share text and direct video URLs', () => {
   assert.equal(parseVideoUrl('Xem video này https://vt.tiktok.com/abc123/ sao chép liên kết').hostname, 'vt.tiktok.com')
