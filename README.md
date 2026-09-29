@@ -118,6 +118,12 @@ access to GitHub releases. Downloads use temporary storage and stream to the bro
 TikTok may still reject requests from hosting-provider IP addresses; this is separate
 from a missing API route. Concurrency is limited per function instance, not globally.
 
+The root `tsconfig.json` also configures the Vercel function compiler: NodeNext emits
+ES modules to match `package.json`, and `rewriteRelativeImportExtensions` rewrites
+local `.ts` imports to `.js` in the deployed output. Vite's referenced tsconfig files
+alone do not configure this compiler. Run `node --test server/vercel-build.test.cjs`
+to compile and boot the API from JavaScript, in addition to the frontend build.
+
 Only individual public TikTok videos and direct video files are supported. Private, login-required,
 region-restricted or unavailable videos may fail. The importer does not request account cookies.
 The original source media is downloaded; editing/export behavior is the same as a local file.
