@@ -71,7 +71,7 @@ export default function VideoEditor() {
     <div className="video-editor-app">
       <header className="editor-topbar">
         <div className="editor-brand">
-          <span className="brand-icon"><StudioIcon name="film" size={21} /></span>
+          <img className="brand-logo" src={`${import.meta.env.BASE_URL}logo.png`} alt="Logo Video Editor Studio" width={48} height={48} />
           <div className="brand-lockup"><span className="brand-name">Video Editor<span className="brand-studio">STUDIO</span></span><span className="brand-caption">Dự án chưa đặt tên</span></div>
         </div>
         <div className="header-history">

@@ -244,6 +244,7 @@ kbd { font: 10px var(--mono); border: 1px solid var(--border-strong); background
 .video-editor-app { padding: 0 12px 0 94px; gap: 12px; }
 .editor-topbar { margin-left: -82px; height: 60px; padding: 0 8px; background: linear-gradient(100deg,#0b1422,#10152c); }
 .brand-icon { width: 40px; height: 40px; background: linear-gradient(135deg,#a06bff,#703bfa); box-shadow: inset 0 0 12px #c0a1ff30; }
+.brand-logo { display: block; width: 48px; height: 48px; flex-shrink: 0; object-fit: contain; border-radius: 8px; background: #fff; }
 .brand-lockup { flex-direction: row; align-items: center; gap: 18px; }
 .brand-name { font-size: 20px; font-weight: 700; gap: 12px; white-space: nowrap; }
 .brand-studio { padding: 5px 10px; border-radius: 8px; background: var(--accent-soft); letter-spacing: 0; font-size: 11px; }
