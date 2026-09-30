@@ -10,6 +10,7 @@ import PropertiesPanel from './PropertiesPanel'
 import TextPanel from './TextPanel'
 import VisualPanel from './VisualPanel'
 import EditorDialog from './EditorDialog'
+import type { CanvasAspectRatio } from '../../types/editor'
 
 const isTyping = (el: EventTarget | null) =>
   el instanceof HTMLInputElement ||
@@ -18,7 +19,7 @@ const isTyping = (el: EventTarget | null) =>
   (el instanceof HTMLElement && el.isContentEditable)
 
 export default function VideoEditor() {
-  const { togglePlay, cutSelectedClip, duplicateClip, splitClip, undo, redo, clearAssets, canUndo, canRedo, tracks, selectedClipId, selectedVisualElementId, assets, visualElements } = useEditor()
+  const { togglePlay, cutSelectedClip, duplicateClip, splitClip, undo, redo, clearAssets, canUndo, canRedo, tracks, selectedClipId, selectedVisualElementId, assets, visualElements, canvas, setCanvasAspectRatio } = useEditor()
   const [isTestModalOpen, setIsTestModalOpen] = useState(false)
   const [isExportOpen, setIsExportOpen] = useState(false)
   const [isNewOpen, setIsNewOpen] = useState(false)
@@ -71,16 +72,17 @@ export default function VideoEditor() {
       <header className="editor-topbar">
         <div className="editor-brand">
           <span className="brand-icon"><StudioIcon name="film" size={21} /></span>
-          <div className="brand-lockup"><span className="brand-name">Video Editor<span className="brand-studio">STUDIO</span></span><span className="brand-caption">Untitled project</span></div>
+          <div className="brand-lockup"><span className="brand-name">Video Editor<span className="brand-studio">STUDIO</span></span><span className="brand-caption">Dự án chưa đặt tên</span></div>
         </div>
         <div className="header-history">
           <button className="btn-toolbar" onClick={undo} disabled={!canUndo} title="Undo (Ctrl + Z)" aria-label="Undo"><StudioIcon name="undo" /></button>
           <button className="btn-toolbar" onClick={redo} disabled={!canRedo} title="Redo (Ctrl + Shift + Z)" aria-label="Redo"><StudioIcon name="redo" /></button>
-          <span className="workspace-label"><span className="workspace-dot" />{hasContent ? 'Editing / Not saved to disk' : 'Ready to create'}</span>
+          <span className="workspace-label"><span className="workspace-dot" />{hasContent ? 'Đang chỉnh sửa · Chưa lưu ra tệp' : 'Sẵn sàng sáng tạo'}</span>
         </div>
         <div className="editor-header-actions">
-          <button type="button" className="btn-secondary" onClick={() => setIsNewOpen(true)}><StudioIcon name="plus" size={16} /><span>New project</span></button>
-          <button type="button" className="btn-primary" onClick={() => setIsExportOpen(true)}>Export video<StudioIcon name="arrow" size={16} /></button>
+          <button type="button" className="btn-secondary" aria-label="New project" onClick={() => setIsNewOpen(true)}><StudioIcon name="plus" size={16} /><span>Dự án mới</span></button>
+          <select className="header-aspect-ratio" aria-label="Tỷ lệ khung hình" value={canvas.aspectRatio} onChange={event => setCanvasAspectRatio(event.target.value as CanvasAspectRatio)}>{(['original', '16:9', '9:16', '1:1', '4:5'] as const).map(ratio => <option key={ratio} value={ratio}>{ratio === 'original' ? 'Gốc' : ratio}</option>)}</select>
+          <button type="button" className="btn-primary" aria-label="Export video" onClick={() => setIsExportOpen(true)}><StudioIcon name="upload" size={16} />Xuất video<StudioIcon name="arrow" size={16} /></button>
         </div>
       </header>
 

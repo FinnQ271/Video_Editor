@@ -105,7 +105,7 @@ export default function VideoPreview(){
   const fallbackSrc=activeClip?.src??selectedAsset?.url
 
   return <div className={`video-preview-stage ${isFullscreen?'fullscreen-stage':''}`} ref={containerRef}>
-    <div className="preview-heading"><div><StudioIcon name="monitor" size={16} /><span>Preview</span><span className="preview-live">CANVAS</span></div><span className="canvas-size">{canvas.width} × {canvas.height}</span></div>
+    <div className="preview-heading"><div><StudioIcon name="monitor" size={16} /><span>Xem trước</span><span className="preview-live">Chất lượng đầy đủ</span></div><span className="canvas-size">{canvas.width} × {canvas.height}</span></div>
     <div className="preview-viewport" ref={viewportRef}>{cvDims.width>0&&<div className="canvas-viewport" style={{width:cvDims.width,height:cvDims.height,backgroundColor:canvas.background}}>
       {transitionState ? <>
         <ChromaVideoLayer ref={outRef} src={transitionState.from.src} settings={transitionState.from.chromaKey} className="transition-video-layer" style={{...transformStyle(transitionState.from),...fx?.out}}/>

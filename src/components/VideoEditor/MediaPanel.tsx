@@ -13,10 +13,11 @@ import EditorDialog from './EditorDialog'
 
 export default function MediaPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const { assets, selectedAssetId, tracks, addAssets, removeAsset, clearAssets, selectAsset, addClipToTimeline, setCurrentTime, setPlaying } = useEditor()
+  const { assets, selectedAssetId, tracks, addAssets, removeAsset, selectAsset, addClipToTimeline, setCurrentTime, setPlaying } = useEditor()
   
   const [activeTab, setActiveTab] = useState<'media' | 'audio' | 'text' | 'visual' | 'effects' | 'transitions'>('media')
   const [isUrlOpen, setIsUrlOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const [isHovered, setIsHovered] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string>('')
@@ -84,28 +85,17 @@ export default function MediaPanel() {
         {(['media', 'audio', 'text', 'visual', 'effects', 'transitions'] as const).map(tab =>
           <button key={tab} type="button" className={'panel-tab-btn ' + (activeTab === tab ? 'tab-active' : '')} aria-pressed={activeTab === tab} onClick={() => setActiveTab(tab)}>
             <StudioIcon name={tab === 'media' ? 'film' : tab === 'visual' ? 'image' : tab === 'transitions' ? 'transition' : tab} />
-            {tab[0].toUpperCase() + tab.slice(1)}
+            {{ media: 'Media', audio: 'Audio', text: 'Text', visual: 'Elements', effects: 'Hiệu ứng', transitions: 'Chuyển cảnh' }[tab]}
           </button>)}
       </div>
       {activeTab === 'visual' ? <div className="panel-tab-content"><VisualPanel mode="library" /></div>
         : activeTab === 'text' ? <div className="panel-tab-content"><TextPanel mode="library" /></div>
         : activeTab !== 'media' ? <div className="panel-tab-content"><LibraryTools tab={activeTab} /></div>
         : <div className="panel-tab-content">
-          <div className="media-panel-header">
-            <div><span className="panel-eyebrow">YOUR COLLECTION</span><h2>Media library</h2></div>
-            {assets.length > 0 && (
-              <div className="media-header-actions">
-                <button className="btn-secondary btn-sm" onClick={() => { if (!isProcessing) fileInputRef.current?.click() }} disabled={isProcessing}>
-                  + Add
-                </button>
-                <button className="btn-danger btn-sm" onClick={clearAssets} title="Clear all media">
-                  Clear
-                </button>
-              </div>
-            )}
+          <div className="media-import-actions">
+            <button type="button" className="btn-primary" aria-label="Import video" onClick={() => fileInputRef.current?.click()} disabled={isProcessing}><StudioIcon name="upload" size={16} />Tải lên</button>
+            <button type="button" className="btn-secondary" aria-label="Import from link" onClick={() => setIsUrlOpen(true)}><StudioIcon name="arrow" size={16} />Nhập URL</button>
           </div>
-
-          <button type="button" className="btn-secondary import-link-button" onClick={() => setIsUrlOpen(true)}><StudioIcon name="arrow" size={16} /> Import from link</button>
           {isUrlOpen && <EditorDialog title="Import video from link" onClose={() => setIsUrlOpen(false)}><div className="export-modal-head"><div><span className="export-kicker">MEDIA LIBRARY</span><h2>Import from link</h2><p>Paste a video URL to add it to your project.</p></div><button type="button" title="Close import" aria-label="Close import" onClick={() => setIsUrlOpen(false)}>×</button></div>
           <UrlImport onImport={(asset, addToTimeline) => {
             addAssets([asset])
@@ -135,20 +125,26 @@ export default function MediaPanel() {
           />
 
       {assets.length === 0 ? (
+        <>
         <div
           className={`dropzone-empty ${isHovered ? 'dropzone-active' : ''}`}
+          role="button" tabIndex={0} aria-label="Chọn video để nhập"
+          onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ') && !isProcessing) { event.preventDefault(); fileInputRef.current?.click() } }}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={onDrop}
           onClick={() => { if (!isProcessing) fileInputRef.current?.click() }}
         >
           <div className="dropzone-icon"><StudioIcon name="upload" size={28} /></div>
-          <h3>{isHovered ? 'Drop media to import' : 'No media yet'}</h3>
-          <p>Drop videos here, or import a file.</p>
+          <h3>{isHovered ? 'Thả video để nhập' : 'Kéo thả file vào đây'}</h3>
+          <p>hoặc nhấn để chọn file</p>
           <button type="button" className="btn-primary" disabled={isProcessing}>
-            {isProcessing ? 'Processing Video…' : 'Import video'}
+            {isProcessing ? 'Đang xử lý…' : 'Chọn video'}
           </button>
+          <small>Hỗ trợ: MP4, WEBM, MOV, M4V</small>
         </div>
+        <div className="media-empty-collection"><span>THƯ VIỆN MEDIA</span><p>Video bạn tải lên sẽ xuất hiện tại đây.</p><small>Thêm video vào timeline để bắt đầu chỉnh sửa.</small></div>
+        </>
       ) : (
         <div className="media-library-body">
           <div
@@ -159,11 +155,12 @@ export default function MediaPanel() {
             onDrop={onDrop}
             onClick={() => { if (!isProcessing) fileInputRef.current?.click() }}
           >
-            <span>+ Drag & Drop more videos or click to browse</span>
+            <StudioIcon name="upload" size={28} /><strong>Kéo thả file vào đây</strong><span>hoặc nhấn để chọn file</span>
           </div>
-
+          <div className="media-collection-heading"><span>Video</span><small>{assets.length} tài nguyên</small></div>
+          <label className="media-search"><StudioIcon name="search" size={17} /><input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Tìm kiếm media..." aria-label="Tìm kiếm media" /></label>
           <div className="media-grid">
-            {assets.map((asset) => {
+            {assets.filter(asset => asset.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map((asset) => {
               const isSelected = selectedAssetId === asset.id
               const formatExt = asset.name.split('.').pop()?.toUpperCase() || 'VIDEO'
 
@@ -222,6 +219,7 @@ export default function MediaPanel() {
               )
             })}
           </div>
+          {search && !assets.some(asset => asset.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())) && <p className="media-search-empty">Không tìm thấy video phù hợp.</p>}
 
           {selectedAsset && (
             <div className="asset-details-box">
