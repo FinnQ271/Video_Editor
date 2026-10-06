@@ -123,6 +123,9 @@ export interface TimelineClip {
   duration: number // sourceEnd - sourceStart
   thumbnail?: string
   volume?: number
+  muted?: boolean
+  fadeIn?: number // seconds in local timeline time
+  fadeOut?: number // seconds in local timeline time
   keyframeProperties?: KeyframedProperty[]
   chromaKey?: ChromaKeySettings
   textProperties?: TextOverlayProperties

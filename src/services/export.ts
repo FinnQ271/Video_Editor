@@ -1,4 +1,4 @@
-import type { EditorProject, TimelineClip, VideoTransition, VisualElement } from '../types/editor'
+﻿import type { EditorProject, TimelineClip, VideoTransition, VisualElement } from '../types/editor'
 import { fetchFile, getFFmpeg } from './ffmpeg'
 import { hasSquareBounds } from '../utils/visualGeometry'
 
@@ -17,6 +17,47 @@ export interface ExportResult { blob: Blob; fileName: string; limitations: strin
 
 const HEIGHTS: Record<ExportResolution, number> = { '480p': 480, '720p': 720, '1080p': 1080, '2K': 1440, '4K': 2160 }
 
+function tempo(speed: number): string {
+  const parts: string[] = []
+  while (speed > 2) { parts.push('atempo=2'); speed /= 2 }
+  while (speed < 0.5) { parts.push('atempo=0.5'); speed *= 2 }
+  parts.push(`atempo=${speed}`)
+  return parts.join(',')
+}
+
+function sourceDuration(clip: TimelineClip) {
+  return clip.sourceEnd === undefined ? clip.duration * (clip.speed || 1) : clip.sourceEnd - clip.sourceStart
+}
+
+function audible(clip: TimelineClip) {
+  return !clip.muted && ((clip.volume ?? 1) > 0 || clip.keyframeProperties?.some(p => p.property === 'volume' && p.keyframes.some(k => k.value > 0)))
+}
+
+function volumeExpression(clip: TimelineClip) {
+  const frames = [...(clip.keyframeProperties?.find(p => p.property === 'volume')?.keyframes ?? [])].sort((a,b) => a.time-b.time)
+  if (!frames.length) return String(Math.max(0, Math.min(1, clip.volume ?? 1)))
+  let expression = String(frames.at(-1)!.value)
+  for (let i = frames.length - 2; i >= 0; i--) {
+    const left = frames[i], right = frames[i+1]
+    const p = `clip((t-${left.time})/${Math.max(0.000001, right.time-left.time)},0,1)`
+    const eased = right.easing === 'ease-in' ? `pow(${p},2)` : right.easing === 'ease-out' ? `(1-pow(1-${p},2))` : right.easing === 'ease-in-out' ? `if(lt(${p},0.5),2*pow(${p},2),1-pow(-2*${p}+2,2)/2)` : p
+    expression = `if(lt(t,${right.time}),${left.value}+(${right.value-left.value})*${eased},${expression})`
+  }
+  return `'clip(if(lt(t,${frames[0].time}),${frames[0].value},${expression}),0,1)'`
+}
+
+async function probeStreams(ffmpeg: Awaited<ReturnType<typeof getFFmpeg>>, name: string) {
+  const streams = { video: false, audio: false }
+  const listener = ({ message }: { message: string }) => {
+    if (/Stream #\d+:\d+.*Video:/.test(message)) streams.video = true
+    if (/Stream #\d+:\d+.*Audio:/.test(message)) streams.audio = true
+  }
+  ffmpeg.on('log', listener)
+  // Input inspection intentionally exits without an output file.
+  try { await ffmpeg.exec(['-i', name]) } finally { ffmpeg.off('log', listener) }
+  return streams
+}
+
 export function validateExportOptions(project: ExportProjectSnapshot, options: ExportOptions) {
   if (![24, 30, 60].includes(options.fps)) throw new Error('Invalid frame rate. Choose 24, 30 or 60 FPS.')
   if (!Object.hasOwn(HEIGHTS, options.resolution)) throw new Error('Invalid export resolution.')
@@ -24,6 +65,13 @@ export function validateExportOptions(project: ExportProjectSnapshot, options: E
   if (!Number.isFinite(project.duration) || project.duration < 0) throw new Error('Invalid project duration.')
   if (![project.canvas.width, project.canvas.height].every(n => Number.isFinite(n) && n > 0)) {
     throw new Error('Invalid canvas dimensions.')
+  }
+  for (const track of project.tracks) for (const clip of track.clips) {
+    if (![clip.timelineStart, clip.sourceStart, clip.duration, clip.speed ?? 1].every(Number.isFinite) ||
+      (clip.speed ?? 1) <= 0 || clip.sourceStart < 0 || clip.duration < 0 ||
+      (clip.sourceEnd !== undefined && (!Number.isFinite(clip.sourceEnd) || clip.sourceEnd < clip.sourceStart))) {
+      throw new Error(`Invalid timing or speed for clip ${clip.name}.`)
+    }
   }
 }
 
@@ -77,13 +125,22 @@ async function rasterizeVisual(element: VisualElement): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-export async function exportProject(
+let exportQueue: Promise<unknown> = Promise.resolve()
+
+export function exportProject(project: ExportProjectSnapshot, options: ExportOptions, onProgress?: (progress: ExportProgress) => void): Promise<ExportResult> {
+  // FFmpeg has a shared filesystem and encoder; keep complete sessions atomic.
+  const result = exportQueue.then(() => exportSession(project, options, onProgress))
+  exportQueue = result.catch(() => undefined)
+  return result
+}
+
+async function exportSession(
   project: ExportProjectSnapshot,
   options: ExportOptions,
   onProgress?: (progress: ExportProgress) => void,
 ): Promise<ExportResult> {
   validateExportOptions(project, options)
-  const videoClips = project.tracks.filter(t => t.type === 'video' && !t.muted).flatMap(t => t.clips).filter(c => c.src).sort((a,b) => a.timelineStart-b.timelineStart)
+  const videoClips = project.tracks.filter(t => t.type === 'video').flatMap(t => t.clips).filter(c => c.src && c.duration > 0 && c.timelineStart < project.duration).sort((a,b) => a.timelineStart-b.timelineStart)
   if (!videoClips.length) throw new Error('Project has no exportable video clip.')
 
   onProgress?.({ percent: 0, stage: 'Preparing...' })
@@ -94,7 +151,7 @@ export async function exportProject(
     if (logs.length > 20) logs.shift()
   }
   const handleProgress = ({ progress }: { progress: number }) => {
-    if (!Number.isFinite(progress)) return
+    if (!encoding || !Number.isFinite(progress)) return
     const percent = Math.max(0, Math.min(99, Math.round(progress * 100)))
     onProgress?.({ percent, stage: percent < 70 ? 'Rendering...' : 'Encoding...' })
   }
@@ -104,59 +161,78 @@ export async function exportProject(
   const audioNames: string[] = []
   const visualNames: string[] = []
   const outName = `export.${options.format}`
+  let encoding = false
   try {
   const { width, height } = getExportDimensions(project, options.resolution)
+  const audioInputs: { clip: TimelineClip; index: number }[] = []
 
   for (let i=0; i<videoClips.length; i++) {
     const clip = videoClips[i]
     const name = `video_${i}.${extFromClip(clip)}`
     inputNames.push(name)
     await ffmpeg.writeFile(name, await fetchFile(clip.src!))
+    const track = project.tracks.find(t => t.clips.some(c => c.id === clip.id))
+    const streams = await probeStreams(ffmpeg, name)
+    if (!streams.video) throw new Error(`Video clip ${clip.name} has no readable video stream.`)
+    if (!track?.muted && audible(clip) && streams.audio) audioInputs.push({ clip, index: i })
   }
 
-  const audioClips = project.tracks.filter(t => t.type === 'audio' && !t.muted).flatMap(t => t.clips).filter(c => c.src)
+  const audioClips = project.tracks.filter(t => t.type === 'audio' && !t.muted).flatMap(t => t.clips).filter(c => c.src && audible(c) && c.duration > 0 && c.timelineStart < project.duration)
   for (let i=0; i<audioClips.length; i++) {
     const clip = audioClips[i]
     const name = `audio_${i}.${extFromClip(clip)}`
     audioNames.push(name)
     await ffmpeg.writeFile(name, await fetchFile(clip.src!))
+    if (!(await probeStreams(ffmpeg, name)).audio) {
+      console.warn('[Export] Timeline contains audio but no audio stream was generated', clip.name)
+      throw new Error(`Audio clip ${clip.name} has no readable audio stream.`)
+    }
+    audioInputs.push({ clip, index: videoClips.length + i })
   }
 
   const exportVisuals = project.visualElements.filter(v => v.kind !== 'shape' && v.src && v.endTime > v.startTime)
   for (let i=0;i<exportVisuals.length;i++) { const name=`visual_${i}.png`; visualNames.push(name); await ffmpeg.writeFile(name, await rasterizeVisual(exportVisuals[i])) }
 
   const args: string[] = []
-  videoClips.forEach((clip, i) => args.push('-ss', String(clip.sourceStart), '-t', String(clip.duration), '-i', inputNames[i]))
-  audioClips.forEach((clip, i) => args.push('-ss', String(clip.sourceStart), '-t', String(clip.duration), '-i', audioNames[i]))
+  videoClips.forEach((clip, i) => args.push('-ss', String(clip.sourceStart), '-t', String(sourceDuration(clip)), '-i', inputNames[i]))
+  audioClips.forEach((clip, i) => args.push('-ss', String(clip.sourceStart), '-t', String(sourceDuration(clip)), '-i', audioNames[i]))
   visualNames.forEach(name => args.push('-loop','1','-i',name))
 
   const filters: string[] = []
   videoClips.forEach((clip, i) => {
-    const speed = Math.max(0.1, clip.speed ?? 1)
+    const speed = (clip.speed ?? 1)
     const tr = clip.transform
     const transform = tr ? `,scale=iw*${Math.abs(tr.scaleX || 1)}:ih*${Math.abs(tr.scaleY || 1)}${tr.scaleX < 0 ? ',hflip' : ''}${tr.scaleY < 0 ? ',vflip' : ''}` : ''
-    filters.push(`[${i}:v]setpts=PTS/${speed},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black${transform},fps=${options.fps},format=yuv420p[v${i}]`)
+    filters.push(`[${i}:v]setpts=(PTS-STARTPTS)/${speed},scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black${transform},fps=${options.fps},format=yuv420p[v${i}]`)
   })
 
-  let videoOut = 'v0'
-  if (videoClips.length > 1) {
-    let acc = 0
-    for (let i=1; i<videoClips.length; i++) {
-      const previous = videoClips[i-1]
-      const transition = project.transitions.find(t => t.fromClipId === previous.id && t.toClipId === videoClips[i].id)
-      const left = i === 1 ? '[v0]' : `[vx${i-1}]`
-      const right = `[v${i}]`
-      if (transition && ['fade','dissolve','slide','wipe'].includes(transition.type)) {
-        const d = Math.max(0.05, Math.min(transition.duration, previous.duration, videoClips[i].duration))
-        acc += previous.duration - (i > 1 ? (project.transitions.find(t => t.toClipId === previous.id)?.duration ?? 0) : 0)
-        const xfadeName = transition.type === 'slide' ? 'slideleft' : transition.type === 'wipe' ? 'wipeleft' : 'fade'
-        filters.push(`${left}${right}xfade=transition=${xfadeName}:duration=${d}:offset=${Math.max(0, acc-d)}[vx${i}]`)
-      } else {
-        filters.push(`${left}${right}concat=n=2:v=1:a=0[vx${i}]`)
-      }
-      videoOut = `vx${i}`
+  // Preview transitions freeze the outgoing last frame at the incoming start;
+  // they do not shorten the project or move subsequent clips earlier.
+  const incomingTransitions = videoClips.map(clip => project.transitions.find(t =>
+    t.toClipId === clip.id && videoClips.some(c => c.id === t.fromClipId) &&
+    ['fade','dissolve','slide','wipe'].includes(t.type) && t.duration > 0))
+  videoClips.forEach((clip, i) => {
+    const consumers = incomingTransitions.flatMap((t, j) => t?.fromClipId === clip.id ? [j] : [])
+    if (consumers.length) filters.push(`[v${i}]split=${consumers.length+1}[main${i}]${consumers.map(j=>`[tail${j}]`).join('')}`)
+    else filters.push(`[v${i}]null[main${i}]`)
+  })
+  filters.push(`color=c=black:s=${width}x${height}:r=${options.fps}:d=${project.duration}[base]`)
+  videoClips.forEach((clip, i) => {
+    const transition = incomingTransitions[i]
+    let local = `main${i}`
+    if (transition) {
+      const previous = videoClips.find(c => c.id === transition.fromClipId)!
+      const d = Math.min(transition.duration, clip.duration)
+      filters.push(`[tail${i}]trim=start=${Math.max(0, previous.duration-1/options.fps)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${d},settb=AVTB[frozen${i}]`)
+      filters.push(`[main${i}]settb=AVTB[incoming${i}]`)
+      const effect = transition.type === 'slide' ? 'slideleft' : transition.type === 'wipe' ? 'wipeleft' : 'fade'
+      filters.push(`[frozen${i}][incoming${i}]xfade=transition=${effect}:duration=${d}:offset=0[transition${i}]`)
+      local = `transition${i}`
     }
-  }
+    filters.push(`[${local}]setpts=PTS+${clip.timelineStart}/TB[placed${i}]`)
+    filters.push(`[${i === 0 ? 'base' : `placedout${i-1}`}][placed${i}]overlay=eof_action=pass:enable='gte(t,${clip.timelineStart})*lt(t,${clip.timelineStart+clip.duration})'[placedout${i}]`)
+  })
+  let videoOut = `placedout${videoClips.length-1}`
 
   // Composite imported visuals after the video/transition graph. Mask pixels come from the same non-destructive mask model as Preview.
   exportVisuals.forEach((visual,i)=>{
@@ -174,14 +250,17 @@ export async function exportProject(
   if(exportVisuals.length) videoOut=`vo${exportVisuals.length-1}`
 
   let audioOut: string | undefined
-  if (audioClips.length) {
-    audioClips.forEach((clip, i) => {
-      const inputIndex = videoClips.length + i
+  if (audioInputs.length) {
+    audioInputs.forEach(({ clip, index }, i) => {
       const delay = Math.max(0, Math.round(clip.timelineStart * 1000))
-      filters.push(`[${inputIndex}:a]volume=${clip.volume ?? 1},adelay=${delay}|${delay}[a${i}]`)
+      const speed = (clip.speed ?? 1)
+      const fadeIn = Math.min(clip.duration, Math.max(0, clip.fadeIn ?? 0))
+      const fadeOut = Math.min(clip.duration, Math.max(0, clip.fadeOut ?? 0))
+      const fades = `${fadeIn ? `,afade=t=in:d=${fadeIn}` : ''}${fadeOut ? `,afade=t=out:st=${clip.duration-fadeOut}:d=${fadeOut}` : ''}`
+      filters.push(`[${index}:a:0]asetpts=PTS-STARTPTS,${tempo(speed)},atrim=duration=${clip.duration},volume=${volumeExpression(clip)}:eval=frame${fades},atrim=start=${Math.max(0,-clip.timelineStart)},asetpts=PTS-STARTPTS,adelay=${delay}:all=1[a${i}]`)
     })
-    if (audioClips.length === 1) audioOut = 'a0'
-    else { filters.push(`${audioClips.map((_,i)=>`[a${i}]`).join('')}amix=inputs=${audioClips.length}:duration=longest:normalize=0[aout]`); audioOut='aout' }
+    filters.push(`${audioInputs.map((_,i)=>`[a${i}]`).join('')}amix=inputs=${audioInputs.length}:duration=longest:normalize=0,apad,atrim=duration=${project.duration}[aout]`)
+    audioOut = 'aout'
   }
 
   args.push('-filter_complex', filters.join(';'), '-map', `[${videoOut}]`)
@@ -190,12 +269,18 @@ export async function exportProject(
   else args.push('-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', ...(audioOut ? ['-c:a','libopus','-b:a','160k'] : []))
   args.push('-r', String(options.fps), '-t', String(project.duration), '-y', outName)
 
+  if (import.meta.env.DEV) console.debug('[Export]', { videoClips: videoClips.length, audioClips: audioInputs.length, args })
+  logs.length = 0
+  encoding = true
   const exitCode = await ffmpeg.exec(args)
+  encoding = false
   if (exitCode !== 0) {
     const detail = logs.slice(-8).join('\n')
     throw new Error(`Video export failed (FFmpeg code ${exitCode}).${detail ? '\n' + detail : ' Try a lower resolution or check your source videos.'}`)
   }
   onProgress?.({ percent: 99, stage: 'Finalizing...' })
+  const outputStreams = await probeStreams(ffmpeg, outName)
+  if (!outputStreams.video || (audioOut && !outputStreams.audio)) throw new Error('Export validation failed: output is missing a required video/audio stream.')
   const data = await ffmpeg.readFile(outName)
   if (!(data instanceof Uint8Array) || data.byteLength === 0) throw new Error('FFmpeg produced an empty video. Check your source clips and try again.')
   const bytes = new Uint8Array(data)

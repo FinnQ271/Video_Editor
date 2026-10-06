@@ -10,6 +10,18 @@ import { syncPlaybackVideo } from '../../utils/playback'
 import { getVisualSize, hasSquareBounds } from '../../utils/visualGeometry'
 
 const clamp01 = (n:number) => Math.max(0, Math.min(1, n))
+
+function AudioClipPreview({ clip, time, playing, volume, muted }: { clip: TimelineClip; time: number; playing: boolean; volume: number; muted: boolean }) {
+  const ref = useRef<HTMLAudioElement>(null)
+  useEffect(() => {
+    const sync = () => syncPlaybackVideo(ref.current, clip, clip.sourceStart + (time-clip.timelineStart)*(clip.speed || 1), playing, volume, muted)
+    sync()
+    const audio = ref.current
+    audio?.addEventListener('loadedmetadata', sync)
+    return () => audio?.removeEventListener('loadedmetadata', sync)
+  }, [clip, time, playing, volume, muted])
+  return <audio ref={ref} src={clip.src} preload="auto" />
+}
 function transitionStyles(type: VideoTransition['type'], p: number) {
   const q=clamp01(p), out: React.CSSProperties={}, incoming: React.CSSProperties={}
   switch(type){
@@ -79,14 +91,15 @@ export default function VideoPreview(){
   usePlaybackClock(currentTime, duration, isPlaying, setCurrentTime, setPlaying)
 
   useEffect(() => {
+    const clipMuted = (clip: TimelineClip) => isMuted || !!tracks.find(t => t.clips.some(c => c.id === clip.id))?.muted
     const synchronize = () => {
       if (transitionState) {
         const { from, to, progress } = transitionState
         // The outgoing clip holds its last frame; do not repeatedly play/seek its ending.
-        syncPlaybackVideo(outRef.current, from, from.sourceEnd - .02, isPlaying, volume, isMuted, true)
-        syncPlaybackVideo(inRef.current, to, to.sourceStart + progress * transitionState.transition.duration * (to.speed || 1), isPlaying, volume, isMuted)
+        syncPlaybackVideo(outRef.current, from, from.sourceEnd - .02, isPlaying, volume, clipMuted(from), true)
+        syncPlaybackVideo(inRef.current, to, to.sourceStart + progress * transitionState.transition.duration * (to.speed || 1), isPlaying, volume, clipMuted(to))
       } else if (activeClip) {
-        syncPlaybackVideo(mainRef.current, activeClip, activeClip.sourceStart + (currentTime - activeClip.timelineStart) * (activeClip.speed || 1), isPlaying, volume, isMuted)
+        syncPlaybackVideo(mainRef.current, activeClip, activeClip.sourceStart + (currentTime - activeClip.timelineStart) * (activeClip.speed || 1), isPlaying, volume, clipMuted(activeClip))
       } else {
         mainRef.current?.pause()
       }
@@ -96,7 +109,7 @@ export default function VideoPreview(){
     // Initial seek/play must also run when a new source finishes loading while paused.
     videos.forEach(video => video.addEventListener('loadedmetadata', synchronize))
     return () => videos.forEach(video => video.removeEventListener('loadedmetadata', synchronize))
-  }, [currentTime, isPlaying, volume, isMuted, activeClip, transitionState])
+  }, [currentTime, isPlaying, volume, isMuted, activeClip, transitionState, tracks])
 
   const transformStyle=(clip?:TimelineClip):React.CSSProperties=>{const t=clip?.transform;return {opacity:t?.opacity??1,transform:t?`scale(${t.scaleX??1},${t.scaleY??1}) rotate(${t.rotation??0}deg)`:undefined}}
   const fx=transitionState?transitionStyles(transitionState.transition.type,transitionState.progress):undefined
@@ -105,6 +118,7 @@ export default function VideoPreview(){
   const fallbackSrc=activeClip?.src??selectedAsset?.url
 
   return <div className={`video-preview-stage ${isFullscreen?'fullscreen-stage':''}`} ref={containerRef}>
+    {tracks.filter(t => t.type === 'audio').flatMap(track => track.clips.filter(c => c.src && currentTime >= c.timelineStart && currentTime < c.timelineStart+c.duration).map(clip => <AudioClipPreview key={clip.id} clip={clip} time={currentTime} playing={isPlaying} volume={volume} muted={isMuted || track.muted} />))}
     <div className="preview-heading"><div><StudioIcon name="monitor" size={16} /><span>Xem trước</span><span className="preview-live">Chất lượng đầy đủ</span></div><span className="canvas-size">{canvas.width} × {canvas.height}</span></div>
     <div className="preview-viewport" ref={viewportRef}>{cvDims.width>0&&<div className="canvas-viewport" style={{width:cvDims.width,height:cvDims.height,backgroundColor:canvas.background}}>
       {transitionState ? <>

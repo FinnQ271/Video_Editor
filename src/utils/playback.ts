@@ -11,8 +11,8 @@ export class PlaybackClock {
   }
 }
 
-const states = new WeakMap<HTMLVideoElement, { key: string; playing: boolean; pending: boolean }>()
-export function syncPlaybackVideo(video: HTMLVideoElement | null, clip: TimelineClip, time: number, playing: boolean, volume: number, muted: boolean, freeze = false) {
+const states = new WeakMap<HTMLMediaElement, { key: string; playing: boolean; pending: boolean }>()
+export function syncPlaybackVideo(video: HTMLMediaElement | null, clip: TimelineClip, time: number, playing: boolean, volume: number, muted: boolean, freeze = false) {
   if (!video || video.readyState < 1) return
   const key = clip.id + ':' + clip.src
   let state = states.get(video)
@@ -29,8 +29,10 @@ export function syncPlaybackVideo(video: HTMLVideoElement | null, clip: Timeline
   if (video.playbackRate !== rate) video.playbackRate = rate
   const localTime = Math.max(0, (target - clip.sourceStart) / rate)
   const animatedVolume = evaluateProperties(clip.keyframeProperties, localTime, { volume: clip.volume ?? 1 }).volume ?? (clip.volume ?? 1)
-  video.volume = Math.max(0, Math.min(1, volume * animatedVolume))
-  video.muted = muted
+  const fadeIn = clip.fadeIn ? Math.min(1, localTime / clip.fadeIn) : 1
+  const fadeOut = clip.fadeOut ? Math.min(1, Math.max(0, clip.duration-localTime) / clip.fadeOut) : 1
+  video.volume = Math.max(0, Math.min(1, volume * animatedVolume)) * fadeIn * fadeOut
+  video.muted = muted || !!clip.muted
   if (!playing || freeze) {
     if (!video.paused) video.pause()
   } else if (video.paused && !state.pending) {

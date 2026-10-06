@@ -70,3 +70,13 @@ test('unloaded source waits for metadata',()=>{
  assert.equal(v.seeks,0)
  assert.equal(v.plays,0)
 })
+
+test('clip mute and audio fades apply in local timeline time at changed speed',()=>{
+ const v=video(), audio={...clip,duration:5,speed:2,volume:.5,fadeIn:1,fadeOut:1}
+ syncPlaybackVideo(v,audio,1,false,1,false)
+ assert.equal(v.volume,.25)
+ syncPlaybackVideo(v,audio,9,false,1,false)
+ assert.equal(v.volume,.25)
+ syncPlaybackVideo(v,{...audio,muted:true},4,false,1,false)
+ assert.equal(v.muted,true)
+})
